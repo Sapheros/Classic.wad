@@ -1,0 +1,557 @@
+-- SRB2 Lua Script
+-- classic.wad/LUA_CLAS  -- Implement classic games' behavior.
+--
+-- Written by Rumia (rumia1)
+-- Optimizations and additions by James (jameds)
+-- Last modified: 21 December 2017
+--
+-- This file is placed in the public domain.
+--
+-- CREDITS: RapidGame7 for slope detection.
+
+
+-------------------------------------------------------------------------------
+
+freeslot("S_SPINDASH1", "SPR_SPIN")
+freeslot("sfx_rev1", "sfx_rev2", "sfx_rev3", "sfx_rev4",
+         "sfx_rev5", "sfx_rev6", "sfx_rev7")
+
+local REVSOUNDS = { sfx_rev1, sfx_rev2, sfx_rev3, sfx_rev4,
+                    sfx_rev5, sfx_rev6, sfx_rev7 }
+
+-- slope camera adjustment
+local cv_camadjust = CV_RegisterVar({
+	"cam_adjust", "On", CV_SAVE|CV_SHOWMODIF,
+	CV_OnOff
+})
+
+local BUTTONS = { BT_CUSTOM1, BT_CUSTOM2, BT_CUSTOM3, BT_FIRENORMAL }
+
+local cv_classicmenuhold_changed
+local cv_classicmenuhold = CV_RegisterVar({
+	"classic_menuhold", "0.5", CV_SAVE|CV_FLOAT,
+	{ MIN = 0, MAX = FRACUNIT }
+})
+local cv_classicmenurepeat = CV_RegisterVar({
+	"classic_menurepeat", "0.5", CV_SAVE|CV_FLOAT,
+	{ MIN = 0, MAX = FRACUNIT }
+})
+
+local function setcv (player, cv, n)
+	if (n != nil) then
+		COM_BufInsertText(player, string.format("%s %s", cv.name, n))
+	end
+	return cv.value
+end
+local function __playerset (player, b, n)
+	if (n != nil) then
+		player[b] = n
+	end
+	return player[b]
+end
+
+local PV_BOOL = { false, true }
+local menuitems = {
+	{
+		{ string = "movement", portal = 2 },
+		{
+			string = "slope camera", key = cv_camadjust,
+			call = setcv, possiblevalues = { 0, 1 }
+		},
+	},
+	{
+		{
+			string = "Spindash Frames", key = "nofancyrev",
+		  	call = __playerset, possiblevalues = PV_BOOL
+		},
+	},
+}
+
+
+-------------------------------------------------------------------------------
+
+local function range (a, x, y)
+	return (a >= x and a <= y)
+end
+
+local function ClassicSpindash (player)
+	if (player.spincharges > 0) then
+		-- Making this a little easier on ourselves.
+		player.mindash  = player.maxdash
+		player.dashtime = 1  -- Cut off rev sound after the first charge.
+	end
+
+	-- Someone had the bright idea to make it so none of the
+	-- buttons (except use) register during the race countdown.
+	if ((gametype == GT_RACE or gametype == GT_COMPETITION)
+		 and leveltime < 4*TICRATE)
+	then
+		player.charability2 = CA2_NONE
+	else
+		player.charability2 = skins[player.mo.skin].ability2
+		if (player.charability2 == CA2_SPINDASH
+			 and player.mo.state != S_PLAY_DIE)
+		then
+			player.mindash = player.maxdash
+
+			-- You gotta be spindashing, man!
+			if (player.pflags & PF_STARTDASH) then
+				player.jumpfactor = 0  -- can't charge if we jump
+
+				-- Real rev sound plays once.
+				if (player.spincharges == 0) then
+					player.mindash = 23*FRACUNIT
+					player.maxdash = 25*FRACUNIT
+				end
+
+				if (player.cmd.buttons & BT_JUMP
+					 and not (player.prevcmd.buttons & BT_JUMP))
+				then
+					if (player.maxdash < 60*FRACUNIT) then
+						player.maxdash = $ + 5*FRACUNIT
+					end
+
+					S_StartSound(player.mo, REVSOUNDS[1+player.spincharges])
+					if (player.spincharges < 6) then
+						player.spincharges = $+1
+					end
+				end
+			else
+				player.jumpfactor = skins[player.mo.skin].jumpfactor
+				player.spincharges = 0
+			end
+		end
+	end
+end
+
+local function ClassicSpindashFrames (player)
+	/*if (player.mo.state >= S_PLAY_ATK1 and player.mo.state S_PLAY_ATK4)) then
+		if (player.pflags & PF_STARTDASH) then
+			player.mo.state = S_SPINDASH1
+		end
+	elseif (player.pflags & PF_SPINNING) then
+		player.mo.state = S_PLAY_ATK1
+	end*/
+
+	if (player.pflags & PF_STARTDASH) then
+		player.mo.state = S_SPINDASH1
+		--player.panim = PA_ROLL
+
+		player.spindashframe = ($ + 55*FRACUNIT/90) % (4*FRACUNIT)
+
+		for i = 1, 8 do
+			local modust = P_SpawnMobj(player.mo.x, player.mo.y,
+				player.mo.z +
+				((player.mo.eflags & MFE_VERTICALFLIP) and 1 or 0) *
+				(player.mo.height - mobjinfo[MT_PARTICLE].height),
+				MT_PARTICLE)
+
+			modust.tics       = 8
+			modust.eflags     = $|player.mo.eflags & MFE_VERTICALFLIP
+			modust.scale      = player.mo.scale >> 1
+			modust.destscale  = player.mo.scale << 3
+			modust.scalespeed = FixedMul(modust.scalespeed, player.mo.scale)
+			P_SetObjectMomZ(modust, FRACUNIT + P_RandomByte() << 10, false)
+
+			P_InstaThrust(modust, player.mo.angle +
+				FixedAngle(P_RandomRange(-15, 15)*FRACUNIT),
+				-(30*FRACUNIT) / 9)
+			P_TryMove(modust, modust.x + modust.momx, modust.y + modust.momy,
+			          true)
+		end
+		player.mo.frame = player.spindashframe/FRACUNIT
+	end
+end
+
+
+-------------------------------------------------------------------------------
+
+rawset(_G, "slopes", {})
+
+addHook("MapLoad",
+	function ()
+		for l in lines.iterate do
+			if (l.special >= 700) then
+				if (l.special <= 705) then
+					slopes[#l.frontsector] = l
+				elseif (l.special <= 715) then
+					slopes[#l.backsector] = l
+				elseif (l.special <= 722) then
+					for s in sectors.iterate do
+						if (s.tag == l.tag) then
+							slopes[#s] = l
+						end
+					end
+				end
+			end
+		end
+	end)
+
+-- Implement everything, mostly physics.
+addHook("ThinkFrame",
+	function ()
+		for p in players.iterate() do
+			-- initialize classic settings
+			if (p.classic == nil) then
+				p.classic = {}
+
+				p.classic.momentum = true
+				p.classic.nothok   = true
+
+				p.classic.animations = true
+				p.classic.fancyrev   = true
+				p.classic.spincharge = true
+				p.classic.walkspring = true
+				p.classic.droproll   = true  -- no, not "Dropdash"
+
+				-- menu
+				p.classic.menu = {
+					button = 1, tics = 0,
+					page   = 1, item = 1,
+				}
+			end
+
+			if (p.mo == nil or p.classic == false) then
+				return
+			end
+
+			-- Now you're the exception.
+			if (p.mo.skin == "peach"   or
+				 p.mo.skin == "toad"    or
+				 p.mo.skin == "samus"   or
+				 p.mo.skin == "marisa"  or
+				 p.mo.skin == "alice"   or
+				 p.mo.skin == "sonicrefancy" or
+				 p.mo.skin == "modernsonic"  or
+				 p.mo.skin == "sonicre" or
+				 p.mo.skin == "tailsre" or
+				 p.mo.skin == "knuxre"  or
+				 p.mo.skin == "silver"  or
+				 p.mo.skin == "kirby")
+			then
+				p.classic = false  -- and never return
+				return  -- oh.
+			end
+
+			-- initialize state tracking
+			if (p.prevcmd == nil) then  -- If we have one, we must have others.
+				p.prevcmd = { forwardmove = 0, sidemove = 0, buttons = 0 }
+				p.prevz = p.mo.z
+				p.spindashframe = 0
+				p.spincharges   = 0
+				p.prevnormalspeed = p.normalspeed
+			end
+
+			p.topspeed = 34*FRACUNIT
+			p.maxspeed = 115*FRACUNIT  -- Can't have Sonic zooming at
+			                           -- an out-of-control speed.
+
+			if (p.mo.skin == "sonic" or p.mo.skin == "fsonic")
+			then
+				if (p.charability == CA_THOK and p.classic.nothok) then
+					p.charability = CA_NONE  -- Goodbye, Thok..  *sob*
+				end
+				if (gametype != GT_COOP) then
+					p.topspeed = 38*FRACUNIT  -- Match Sonic gets a speed buff.
+				end
+			end
+
+			-- real speed
+			p.rspeed = R_PointToDist2(0, 0, p.rmomx, p.rmomy)
+
+			--      ~TO DO~
+			-- Make an options screen to make certain aspects of this WAD
+			-- togglable, akin to the level select in Sonic 1/2 mobile ports.
+			-- Add abilities from other classic games for Sonic such as
+			-- the Insta-Shield, my version of the Drop Dash,
+			-- the Super PeelOut (needs running animations), and possibly
+			-- with Saph's permission, normal shields replaced with elementals.
+			--
+			----------------------------------------------------------------------
+			--
+			-- I'll leave my suggestions here, instead of removing them from
+			-- the above note, so I don't totally bulldoze your ideas.
+			-- 
+			-- Drop Dash isn't really a "classic" ability, and your script is
+			-- already published on the message board.
+			-- That, to me, makes adding it here seem redundant.
+			-- Also, smaller packages are better, as the software engineers say.
+			-- Same goes with the shields, and I'll add that both those
+			-- ideas, being that they exist seperately, are just as optional as
+			-- putting them in here and adding a toggle button.
+			-- The only positive thing I could say for the inclusion of such
+			-- things, is that the player could add two more WADs, than
+			-- if he simply added the seperate ones.
+			-- But, that's a small perk, right?
+			--
+			--                                                          -James
+			----------------------------------------------------------------------
+			--
+			-- Hey, here I am again!
+			-- I thought about implementing the drop dash, and I think if it
+			-- replaced the spinfix, it could be okay.
+			-- I've never played Mania though, so I don't know how it works.
+			--                                                          -James
+
+			local onslope = slopes[#p.mo.subsector.sector]
+				             and P_IsObjectOnGround(p.mo)
+			if (p.classic.momentum) then
+				local downslope = (
+					onslope
+					and (p.prevz * P_MobjFlip(p.mo) > p.mo.z * P_MobjFlip(p.mo))
+					and p.rspeed >= p.topspeed - 6*FRACUNIT
+					and p.rspeed <  p.maxspeed  -- keep control managable
+				)
+
+				-- Breaking the vanilla speed cap:
+				if (p.rspeed > p.topspeed
+					 -- Dirk's ice surf
+					 and not (p.mo.skin == "dirk" and (p.cmd.buttons & BT_USE))
+					 and not (p.mo.eflags & MFE_JUSTHITFLOOR))
+				then
+					if (not (p.powers[pw_sneakers] or p.powers[pw_super])) then
+						if (P_IsObjectOnGround(p.mo) and p.rspeed > p.normalspeed)
+						then
+							p.normalspeed = $ + p.rspeed - p.topspeed + 6*FRACUNIT
+						elseif (p.rspeed < p.normalspeed - 8*FRACUNIT) then
+							p.normalspeed = $ - 5*FRACUNIT
+						end
+					end
+				elseif (not (p.dashmode or downslope)) then  -- (FSonic dash)
+					p.normalspeed = p.topspeed
+				end
+
+				-- Fixing slope physics slightly to
+				-- play better with the new speed cap.
+				if (downslope) then
+					p.normalspeed = $ + ((p.prevz - p.mo.z) * 2 /
+					                     (p.normalspeed / FRACUNIT))  -- MOAR SPEED
+				end
+
+				-- buffed glide acceleration
+				if (p.charability == CA_GLIDEANDCLIMB
+				 	 and not P_IsObjectOnGround(p.mo)
+
+				 	 and (p.pflags & PF_THOKKED)
+				 	 and not range(p.mo.state, S_PLAY_CLIMB1, S_PLAY_CLIMB5))
+				then
+					if (p.rspeed <= p.maxspeed / 2) then
+						p.actionspd = $ + p.glidetime ^ 2 / 20
+					end
+				else
+					p.actionspd = skins[p.mo.skin].actionspd
+				end
+			end
+
+			-- Experimental camera option that adjusts the camera up or down.
+			-- Intended to depend on whether you're running up or down a slope.
+			--
+			-- todo: modify camera directly, so player can keep his custom height.
+			if (cv_camadjust.value) then
+				if (maptol != TOL_2D
+					 and onslope and not (p.mo.eflags & MFE_JUSTHITFLOOR))
+				then
+					COM_BufInsertText(p, "cam_height " ..
+						20 + (p.prevz - p.mo.z) / FRACUNIT * 3)
+				else
+					COM_BufInsertText(p, "cam_height 20")
+				end
+			end
+
+			-- He gets lots of exceptions.
+			local metalsonic = p.mo.skin == "metal_sonic"
+
+			-- Metal flies and super players are overpowered,
+			-- so they both get souped up acceleration.
+			p.thrustfactor = (p.powers[pw_super] or metalsonic) and 5 or 3
+
+			if (not metalsonic) then  -- Metal does his own thing.
+				p.runspeed     = 24*FRACUNIT
+				p.accelstart   = 178
+				p.acceleration = 48
+			end
+
+			if (p.classic.animations) then
+				if (p.spinitem == MT_THOK) then
+					p.spinitem = MT_NULL  -- Unless you have a custom spintrail,
+					                      -- you don't really need one.
+				end
+
+				if (p.classic.fancyrev
+					 -- These guys already implement their own frames.
+					 and not metalsonic
+					 and p.mo.skin != "fsonic"
+					 and p.mo.skin != "shadow"
+					 and p.mo.skin != "silver"
+					 and p.mo.skin != "tailscd"
+					 and p.mo.skin != "dirk")
+				then
+					p.revitem = MT_NULL
+					ClassicSpindashFrames(p)
+				end
+
+				if (p.classic.walkspring) then
+					if (p.mo.eflags & MFE_SPRUNG) then
+						p.sprung = true
+					end
+					if (p.sprung and p.panim == PA_FALL
+						 and not (p.pflags & PF_THOKKED))  -- whirlwind
+					then
+						p.mo.state = S_PLAY_RUN1
+						p.sprung   = false
+					end
+				end
+			end
+
+			if (p.pflags & PF_SPINNING and not P_IsObjectOnGround(p.mo))
+			then
+				-- Unlock movement by removing PF_SPINNING,
+				-- and thus preventing skimming aswell.
+				-- PF_JUMPED so the player doesn't take damage while falling.
+				p.pflags = $ & ~(PF_SPINNING) | PF_JUMPED
+			end
+
+			if (p.classic.spincharge and not metalsonic) then
+				ClassicSpindash(p)
+			end
+
+			if (p.classic.droproll         and p.charability2 == CA2_SPINDASH
+				 and p.cmd.buttons & BT_USE and p.mo.eflags & MFE_JUSTHITFLOOR
+				 and p.rspeed > FixedMul(p.mo.scale, 4*FRACUNIT)
+
+				 and p.mo.skin != "silver"
+				 and p.mo.skin != "amy"
+				 -- Basically the ENTIRE following block is copied from Dirk's
+				 -- lua script, with minor modifications to ensure that he
+				 -- doesn't spin while he can actually do his ice surf cheesy crust
+				 and not (p.mo.skin == "dirk" and
+				          range(p.mo.state, S_PLAY_ICESURF1, S_PLAY_ICESURF2)))
+			then
+				p.pflags = $|PF_SPINNING
+				S_StartSound(p.mo, sfx_spin)
+			end
+
+			-- Everyone's Super Sonic, even outside of Match.
+			p.charflags = $|SF_SUPER
+
+			-- menu toggle
+			if (p.cmd.buttons & BUTTONS[p.classic.menu.button]) then
+				if (p.prevcmd.buttons & BUTTONS[p.classic.menu.button]) then
+					local xtics = FixedMul(cv_classicmenuhold.value,
+					                       TICRATE*FRACUNIT)
+					if (p.classic.menu.tics < FixedInt(xtics)) then
+						p.classic.menu.tics = $+1
+					else
+						p.classic.menu.active = true
+						p.pflags = $|PF_FORCESTRAFE
+					end
+				else
+					p.classic.menu.active = false
+					p.classic.menu.tics   = 0
+					-- ClassicSpindash() already sets this, but I do it here
+					-- aswell in case of nocharge.
+					p.charability2 = skins[p.mo.skin].ability2
+					p.pflags = $ & ~(PF_FORCESTRAFE)
+				end
+			end
+
+			if (p.classic.menu.active) then
+				if ((p.cmd.forwardmove or p.cmd.sidemove
+					  or (p.cmd.buttons & (BT_JUMP|BT_USE)))
+					 and (not (p.prevcmd.forwardmove or p.prevcmd.sidemove
+					           or (p.prevcmd.buttons & (BT_JUMP|BT_USE)))
+					      or p.classic.menu.tics == 0))
+				then
+					local cat = p.classic.menu.page
+					local sel = p.classic.menu.item
+					local op = menuitems[cat][sel]
+					-- navigation
+					if (p.cmd.forwardmove > 0) then
+						p.classic.menu.item = ($ < #menuitems[cat]) and $+1 or 1
+					elseif (p.cmd.forwardmove < 0) then
+						p.classic.menu.item = ($ > 1) and $-1 or #menuitems[cat]
+					elseif (p.cmd.sidemove and op.possiblevalues) then
+						local poss = op.possiblevalues
+						local least, most = poss.MIN or 1, poss.MAX or #poss
+						if (op.value == nil) then
+							op.value = op.call(p, op.key, nil)
+							for i = 1, #op.possiblevalues do
+								if (op.value == op.possiblevalues[i]) then
+									op.value = i
+								end
+							end
+						end
+						if (p.cmd.sidemove > 0) then
+							op.value = ($ < most) and $+1 or least
+						else
+							op.value = ($ > least) and $-1 or most
+						end
+						if (op.call) then
+							op.call(p, op.key, poss[op.value])
+						end
+					elseif (p.cmd.buttons & BT_JUMP) then
+						p.classic.menu.page = op.portal or cat
+					elseif (p.cmd.buttons & BT_USE) then
+						p.classic.menu.page = 1
+					end
+
+					p.classic.menu.tics = FixedInt(
+						FixedMul(TICRATE*FRACUNIT, cv_classicmenurepeat.value))
+					S_StartSound(nil, sfx_menu1, p)
+				else
+					p.classic.menu.tics = $-1
+				end
+
+				-- Hacks to disable movement while in the menu.
+				p.normalspeed  = 0  -- normalspeed gets set above,
+				                    -- so this is temporary.
+				p.pflags       = $|PF_JUMPSTASIS
+				p.charability2 = CA2_NONE
+			end
+
+			p.prevz = p.mo.z
+			p.prevnormalspeed = p.normalspeed
+
+			p.prevcmd.forwardmove = p.cmd.forwardmove
+			p.prevcmd.sidemove    = p.cmd.sidemove
+			p.prevcmd.buttons     = p.cmd.buttons
+		end
+	end)
+
+local function DrawItems (v, x, y, w, h, items, cat, n)
+	if (cat != 1) then
+		v.drawString(x + 10, y + 10, "*")
+	end
+
+	x = $ + w / 2  -- center
+	y = $ + 4
+	for i = 1, #items[cat] do
+		y = $ + 16
+
+		v.drawString(x, y, items[cat][i].string,
+		             (i == n) and V_YELLOWMAP or 0, "center")
+	end
+end
+
+hud.add(
+	function (v, player)
+/*		local aa = FixedInt(
+			FixedDiv(player.classic.menu.tics*FRACUNIT,
+			         FixedMul(TICRATE*FRACUNIT, FRACUNIT/10))) * V_10TRANS
+		*/
+
+		if (player.classic.menu.active) then
+			-- todo: cleanup
+			--v.drawFill(80, 50, 160, 100, 240)
+			local t_interscr = v.cachePatch("SRB2BACK")  -- 136x32
+			-- (sw/2 = 160) - (w/2 = 68) = 92
+			v.draw(92, 68, t_interscr)
+			v.draw(92, 100, t_interscr)
+			DrawItems(v, 92, 68, 136, 64,
+			          menuitems, player.classic.menu.page,
+			          player.classic.menu.item)
+		end
+	end)
+
+
+-- vim: set ts=3 sw=3 ft=lua :
