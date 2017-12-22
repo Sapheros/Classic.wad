@@ -1,0 +1,12 @@
+~~COMPLETED~~
+-Fixed a bug where Dirk could spin while using ice surf
+-Fixed a bug where Silver could still be put into a rolling state after slide jumping
+-Added some new compatability toggles
+-Removed the old spindash behavior entirely, making it so after the race countdown you can charge a spindash
+-Fix bug where people playing with skins with a custom spindash animation affected people who weren't
+-Disable new spindash for greeneyes
+-Fixed steam vent/fan animations
+-Fixed size/gravity related speed checks
+
+~~TODO~~
+-add spindash frame names to first post for md2 purposes
