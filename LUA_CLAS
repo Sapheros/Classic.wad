@@ -125,17 +125,9 @@ local function ClassicSpindash (player)
 end
 
 local function ClassicSpindashFrames (player)
-	/*if (player.mo.state >= S_PLAY_ATK1 and player.mo.state S_PLAY_ATK4)) then
-		if (player.pflags & PF_STARTDASH) then
-			player.mo.state = S_SPINDASH1
-		end
-	elseif (player.pflags & PF_SPINNING) then
-		player.mo.state = S_PLAY_ATK1
-	end*/
-
 	if (player.pflags & PF_STARTDASH) then
 		player.mo.state = S_SPINDASH1
-		--player.panim = PA_ROLL
+		player.panim = PA_ROLL
 
 		player.spindashframe = ($ + 55*FRACUNIT/90) % (4*FRACUNIT)
 
@@ -415,9 +407,10 @@ addHook("ThinkFrame",
 				ClassicSpindash(p)
 			end
 
-			if (p.classic.droproll         and p.charability2 == CA2_SPINDASH
+			if (p.classic.droproll and p.charability2 == CA2_SPINDASH
 				 and p.cmd.buttons & BT_USE and p.mo.eflags & MFE_JUSTHITFLOOR
 				 and p.rspeed > FixedMul(p.mo.scale, 4*FRACUNIT)
+				 and not (p.mo.state == S_PLAY_DIE or P_CheckDeathPitCollide(p.mo))
 
 				 and p.mo.skin != "silver"
 				 and p.mo.skin != "amy"
@@ -428,6 +421,7 @@ addHook("ThinkFrame",
 				          range(p.mo.state, S_PLAY_ICESURF1, S_PLAY_ICESURF2)))
 			then
 				p.pflags = $|PF_SPINNING
+				p.mo.state = S_PLAY_ATK1  -- standing looks weird
 				S_StartSound(p.mo, sfx_spin)
 			end
 
