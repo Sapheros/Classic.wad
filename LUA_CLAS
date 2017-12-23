@@ -7,7 +7,7 @@
 --
 -- This file is placed in the public domain.
 --
--- CREDITS: RapidGame7 for slope detection.
+-- CREDITS: Rapidgame7 for slope detection.
 
 
 -------------------------------------------------------------------------------
@@ -18,6 +18,33 @@ freeslot("sfx_rev1", "sfx_rev2", "sfx_rev3", "sfx_rev4",
 
 local REVSOUNDS = { sfx_rev1, sfx_rev2, sfx_rev3, sfx_rev4,
                     sfx_rev5, sfx_rev6, sfx_rev7 }
+
+-- Default values for skins.
+rawset(_G, "classic",
+{
+	sonic    = { nothok = true },
+	tails    = {},
+	knuckles = {},
+
+	amy         = { droproll = false },
+	metal_sonic = { fancyrev = false, spincharge = false },
+	shadow      = { fancyrev = false },
+	fsonic      = { fancyrev = false },
+	silver      = { fancyrev = false, droproll = false },
+	tailscd     = { fancyrev = false },
+	dirk        = { fancyrev = false },
+
+	-- Now you're the exception.
+	peach        = false, toad    = false,
+	samus        = false,
+	marisa       = false, alice   = false,
+	modernsonic  = false,
+	sonicrefancy = false, sonicre = false, tailsre = false, knuxre = false,
+	kirby        = false,
+	silver       = false,
+})
+
+local cv_classic
 
 -- slope camera adjustment
 local cv_camadjust = CV_RegisterVar({
@@ -155,9 +182,34 @@ local function ClassicSpindashFrames (player)
 	end
 end
 
+local function ClassicReset (player)
+	local de = classic[player.mo.skin]
+	local t  = player.classic
+
+	t.momentum = (de.momentum == false) or true
+	t.nothok   = (de.nothok   == false) or true
+
+	t.animations = (de.animations == false) or true
+	t.fancyrev   = (de.fancyrev   == false) or t.animations
+	t.spincharge = (de.spincharge == false) or t.animations
+	t.walkspring = (de.walkspring == false) or t.animations
+	t.droproll   = (de.droproll   == false) or t.animations
+end
+
 
 -------------------------------------------------------------------------------
 
+cv_classic = CV_RegisterVar(
+{
+	"classic", "Default", CV_NETVAR,
+	{ No = 0, Yes = 1, Default = 2 },
+})
+
+
+-------------------------------------------------------------------------------
+
+-- Table of sectors that are slopes, also by copy.
+-- Index by sector number.
 rawset(_G, "slopes", {})
 
 addHook("MapLoad",
@@ -183,46 +235,33 @@ addHook("MapLoad",
 addHook("ThinkFrame",
 	function ()
 		for p in players.iterate() do
-			-- initialize classic settings
-			if (p.classic == nil) then
-				p.classic = {}
-
-				p.classic.momentum = true
-				p.classic.nothok   = true
-
-				p.classic.animations = true
-				p.classic.fancyrev   = true
-				p.classic.spincharge = true
-				p.classic.walkspring = true
-				p.classic.droproll   = true  -- no, not "Dropdash"
-
-				-- menu
-				p.classic.menu = {
+			-- foremost initialization
+			if (p.classicmenu == nil) then
+				-- We need atleast the menu, so we can turn on Classic again!
+				p.classicmenu = {
 					button = 1, tics = 0,
 					page   = 1, item = 1,
 				}
 			end
 
-			if (p.mo == nil or p.classic == false) then
+			if (p.mo == nil) then
 				return
 			end
 
-			-- Now you're the exception.
-			if (p.mo.skin == "peach"   or
-				 p.mo.skin == "toad"    or
-				 p.mo.skin == "samus"   or
-				 p.mo.skin == "marisa"  or
-				 p.mo.skin == "alice"   or
-				 p.mo.skin == "sonicrefancy" or
-				 p.mo.skin == "modernsonic"  or
-				 p.mo.skin == "sonicre" or
-				 p.mo.skin == "tailsre" or
-				 p.mo.skin == "knuxre"  or
-				 p.mo.skin == "silver"  or
-				 p.mo.skin == "kirby")
+			if (p.classic) then
+				if (cv_classic.value == 0 or classic[p.mo.skin] == false) then
+					p.classic = nil
+					R_SetPlayerSkin(p, p.mo.skin)
+					return
+				end
+			elseif (cv_classic.value == 1
+				     or (cv_classic.value == 2 and classic[p.mo.skin]))
 			then
-				p.classic = false  -- and never return
-				return  -- oh.
+				p.classic = {}
+				ClassicReset(p)
+				R_SetPlayerSkin(p, p.mo.skin)
+			else
+				return
 			end
 
 			-- initialize state tracking
@@ -238,14 +277,14 @@ addHook("ThinkFrame",
 			p.maxspeed = 115*FRACUNIT  -- Can't have Sonic zooming at
 			                           -- an out-of-control speed.
 
-			if (p.mo.skin == "sonic" or p.mo.skin == "fsonic")
+			if (p.classic.nothok and p.charability == CA_THOK) then
+				p.charability = CA_NONE  -- Goodbye, Thok..  *sob*
+			end
+
+			if (gametype != GT_COOP
+				 and (p.mo.skin == "sonic" or p.mo.skin == "fsonic"))
 			then
-				if (p.charability == CA_THOK and p.classic.nothok) then
-					p.charability = CA_NONE  -- Goodbye, Thok..  *sob*
-				end
-				if (gametype != GT_COOP) then
-					p.topspeed = 38*FRACUNIT  -- Match Sonic gets a speed buff.
-				end
+				p.topspeed = 38*FRACUNIT  -- Competitive Sonic gets a speed buff.
 			end
 
 			-- real speed
@@ -297,9 +336,9 @@ addHook("ThinkFrame",
 
 				-- Breaking the vanilla speed cap:
 				if (p.rspeed > p.topspeed
+					 and not (p.mo.eflags & MFE_JUSTHITFLOOR)
 					 -- Dirk's ice surf
-					 and not (p.mo.skin == "dirk" and (p.cmd.buttons & BT_USE))
-					 and not (p.mo.eflags & MFE_JUSTHITFLOOR))
+					 and not (p.mo.skin == "dirk" and (p.cmd.buttons & BT_USE)))
 				then
 					if (not (p.powers[pw_sneakers] or p.powers[pw_super])) then
 						if (P_IsObjectOnGround(p.mo) and p.rspeed > p.normalspeed)
@@ -350,14 +389,12 @@ addHook("ThinkFrame",
 				end
 			end
 
-			-- He gets lots of exceptions.
-			local metalsonic = p.mo.skin == "metal_sonic"
-
 			-- Metal flies and super players are overpowered,
 			-- so they both get souped up acceleration.
-			p.thrustfactor = (p.powers[pw_super] or metalsonic) and 5 or 3
+			p.thrustfactor = (p.powers[pw_super] or p.mo.skin == "metal_sonic")
+			                 and 5 or 3
 
-			if (not metalsonic) then  -- Metal does his own thing.
+			if (p.mo.skin != "metal_sonic") then  -- Metal does his own thing.
 				p.runspeed     = 24*FRACUNIT
 				p.accelstart   = 178
 				p.acceleration = 48
@@ -369,15 +406,7 @@ addHook("ThinkFrame",
 					                      -- you don't really need one.
 				end
 
-				if (p.classic.fancyrev
-					 -- These guys already implement their own frames.
-					 and not metalsonic
-					 and p.mo.skin != "fsonic"
-					 and p.mo.skin != "shadow"
-					 and p.mo.skin != "silver"
-					 and p.mo.skin != "tailscd"
-					 and p.mo.skin != "dirk")
-				then
+				if (p.classic.fancyrev) then
 					p.revitem = MT_NULL
 					ClassicSpindashFrames(p)
 				end
@@ -403,7 +432,7 @@ addHook("ThinkFrame",
 				p.pflags = $ & ~(PF_SPINNING) | PF_JUMPED
 			end
 
-			if (p.classic.spincharge and not metalsonic) then
+			if (p.classic.spincharge) then
 				ClassicSpindash(p)
 			end
 
@@ -411,12 +440,6 @@ addHook("ThinkFrame",
 				 and p.cmd.buttons & BT_USE and p.mo.eflags & MFE_JUSTHITFLOOR
 				 and p.rspeed > FixedMul(p.mo.scale, 4*FRACUNIT)
 				 and not (p.mo.state == S_PLAY_DIE or P_CheckDeathPitCollide(p.mo))
-
-				 and p.mo.skin != "silver"
-				 and p.mo.skin != "amy"
-				 -- Basically the ENTIRE following block is copied from Dirk's
-				 -- lua script, with minor modifications to ensure that he
-				 -- doesn't spin while he can actually do his ice surf cheesy crust
 				 and not (p.mo.skin == "dirk" and
 				          range(p.mo.state, S_PLAY_ICESURF1, S_PLAY_ICESURF2)))
 			then
@@ -429,19 +452,19 @@ addHook("ThinkFrame",
 			p.charflags = $|SF_SUPER
 
 			-- menu toggle
-			if (p.cmd.buttons & BUTTONS[p.classic.menu.button]) then
-				if (p.prevcmd.buttons & BUTTONS[p.classic.menu.button]) then
+			if (p.cmd.buttons & BUTTONS[p.classicmenu.button]) then
+				if (p.prevcmd.buttons & BUTTONS[p.classicmenu.button]) then
 					local xtics = FixedMul(cv_classicmenuhold.value,
 					                       TICRATE*FRACUNIT)
-					if (p.classic.menu.tics < FixedInt(xtics)) then
-						p.classic.menu.tics = $+1
+					if (p.classicmenu.tics < FixedInt(xtics)) then
+						p.classicmenu.tics = $+1
 					else
-						p.classic.menu.active = true
+						p.classicmenu.active = true
 						p.pflags = $|PF_FORCESTRAFE
 					end
 				else
-					p.classic.menu.active = false
-					p.classic.menu.tics   = 0
+					p.classicmenu.active = false
+					p.classicmenu.tics   = 0
 					-- ClassicSpindash() already sets this, but I do it here
 					-- aswell in case of nocharge.
 					p.charability2 = skins[p.mo.skin].ability2
@@ -449,21 +472,21 @@ addHook("ThinkFrame",
 				end
 			end
 
-			if (p.classic.menu.active) then
+			if (p.classicmenu.active) then
 				if ((p.cmd.forwardmove or p.cmd.sidemove
 					  or (p.cmd.buttons & (BT_JUMP|BT_USE)))
 					 and (not (p.prevcmd.forwardmove or p.prevcmd.sidemove
 					           or (p.prevcmd.buttons & (BT_JUMP|BT_USE)))
-					      or p.classic.menu.tics == 0))
+					      or p.classicmenu.tics == 0))
 				then
-					local cat = p.classic.menu.page
-					local sel = p.classic.menu.item
+					local cat = p.classicmenu.page
+					local sel = p.classicmenu.item
 					local op = menuitems[cat][sel]
 					-- navigation
 					if (p.cmd.forwardmove > 0) then
-						p.classic.menu.item = ($ < #menuitems[cat]) and $+1 or 1
+						p.classicmenu.item = ($ < #menuitems[cat]) and $+1 or 1
 					elseif (p.cmd.forwardmove < 0) then
-						p.classic.menu.item = ($ > 1) and $-1 or #menuitems[cat]
+						p.classicmenu.item = ($ > 1) and $-1 or #menuitems[cat]
 					elseif (p.cmd.sidemove and op.possiblevalues) then
 						local poss = op.possiblevalues
 						local least, most = poss.MIN or 1, poss.MAX or #poss
@@ -484,16 +507,16 @@ addHook("ThinkFrame",
 							op.call(p, op.key, poss[op.value])
 						end
 					elseif (p.cmd.buttons & BT_JUMP) then
-						p.classic.menu.page = op.portal or cat
+						p.classicmenu.page = op.portal or cat
 					elseif (p.cmd.buttons & BT_USE) then
-						p.classic.menu.page = 1
+						p.classicmenu.page = 1
 					end
 
-					p.classic.menu.tics = FixedInt(
+					p.classicmenu.tics = FixedInt(
 						FixedMul(TICRATE*FRACUNIT, cv_classicmenurepeat.value))
 					S_StartSound(nil, sfx_menu1, p)
 				else
-					p.classic.menu.tics = $-1
+					p.classicmenu.tics = $-1
 				end
 
 				-- Hacks to disable movement while in the menu.
@@ -530,11 +553,11 @@ end
 hud.add(
 	function (v, player)
 /*		local aa = FixedInt(
-			FixedDiv(player.classic.menu.tics*FRACUNIT,
+			FixedDiv(player.classicmenu.tics*FRACUNIT,
 			         FixedMul(TICRATE*FRACUNIT, FRACUNIT/10))) * V_10TRANS
 		*/
 
-		if (player.classic.menu.active) then
+		if (player.classicmenu.active) then
 			-- todo: cleanup
 			--v.drawFill(80, 50, 160, 100, 240)
 			local t_interscr = v.cachePatch("SRB2BACK")  -- 136x32
@@ -542,8 +565,8 @@ hud.add(
 			v.draw(92, 68, t_interscr)
 			v.draw(92, 100, t_interscr)
 			DrawItems(v, 92, 68, 136, 64,
-			          menuitems, player.classic.menu.page,
-			          player.classic.menu.item)
+			          menuitems, player.classicmenu.page,
+			          player.classicmenu.item)
 		end
 	end)
 
