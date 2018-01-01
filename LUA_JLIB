@@ -1,0 +1,96 @@
+-- SRB2 Lua Script
+-- classic.wad/LUA_JLIB  -- Various useful functions.
+--
+-- Written by James (jameds)
+-- Last Modified: 30 December 2017
+--
+-- This file is placed in the public domain.
+
+
+-------------------------------------------------------------------------------
+
+-- line_t slopes[]
+-- Array of lines with slope specials; indexable by sector number.
+rawset(_G, "slopes", {})
+
+-- void V_DrawPatchFill (drawer_t v, patch_t pat, [int flags, [color c]])
+--
+-- Draw the given patch across the screen, filling it in entirely.
+rawset(_G, "V_DrawPatchFill", function (v, pat, flags, c)
+	local w, h   = 320, 200
+	local pw, ph = pat.width, pat.height
+
+	if (v.renderer() == "software") then  -- weird software bug with trans
+		flags = ($ == nil) and V_NOSCALESTART or $|V_NOSCALESTART
+		w, h  = v.width(), v.height()
+
+		local dupx = v.dupx()  -- width is always larger in software modes
+		local offs = (dupx & (dupx-1)) and 1 or 0  -- non power of two
+		pw, ph = $1 * dupx + offs, $2 * dupx + offs
+	end
+
+	for x = 0, w, pw do
+		for y = 0, h, ph do
+			v.draw(x, y, pat, flags, c)
+		end
+	end
+end)
+
+-- fixed_t atof (string s)
+--
+-- Converts the given string to a fixed-point number.
+-- Also accounts for a leading minus or plus sign,
+-- aswell as a lack of digits preceding the fractional part.
+rawset(_G, "atof", function (s)
+	local sd, i = s:find("%d+")
+
+	local g = true
+	local n = 0
+	if (s:byte(sd-1) != 46) then
+		n = tonumber(s:sub(1, i))*FRACUNIT
+		i = $+1
+		g = (s:byte(i) == 46)
+	else
+		i = sd-1
+	end
+
+	if (g) then
+		local f = 0
+		g = ((n < 0) and -10 or 10)
+		while (i < #s) do
+			i = $+1
+			f = $ + FixedDiv(((s:byte(i)-48)*10)<<FRACBITS, g<<FRACBITS)
+			g = $ * 10
+		end
+		n = $ + FixedDiv(f, 10<<FRACBITS)
+	end
+
+	return n
+end)
+
+-- string ftoa (fixed_t f)
+--
+-- Transforms the given fixed-point number into a string.
+rawset(_G, "ftoa", function (f)
+	local int = FixedInt(f)
+	f = $ & (FRACUNIT-1)
+	if (f) then
+		f = (FixedMul(10000<<FRACBITS, f) + FRACUNIT/2)>>FRACBITS
+		return int ..".".. string.format("%04d", f)
+	else
+		return tostring(int) .. ".0000"
+	end
+end)
+
+addHook("MapLoad", function () for l in lines.iterate do
+	if (l.special >= 700) then
+		if (l.special >= 710 and l.special <= 715) then
+			slopes[#l.backsector] = l
+		elseif (l.special <= 722) then
+			slopes[#l.frontsector] = l
+		end
+	end
+end end)
+
+
+-- vim: set ts=3 sw=3 ft=lua :
